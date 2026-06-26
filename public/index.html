@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOOMSDAY RAPID AGENT — Institutional Stress Desk</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Plotly.js -->
+    <script src="https://cdn.plot.ly/plotly-2.29.1.min.js" charset="utf-8"></script>
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+
+    <!-- Main Container -->
+    <div class="app-container">
+        
+        <!-- SIDEBAR CONTROLS -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <i class="fa-solid fa-triangle-exclamation neon-red-text"></i>
+                <h2>DOOMSDAY DESK</h2>
+            </div>
+            
+            <div class="sidebar-section">
+                <label class="section-label">Target Selection</label>
+                
+                <div class="input-group">
+                    <label for="preset-select"><i class="fa-solid fa-list"></i> Select Indian/Global Preset</label>
+                    <select id="preset-select">
+                        <option value="">-- Custom Input --</option>
+                        <option value="RELIANCE.NS" selected>Reliance Industries (NSE: RELIANCE)</option>
+                        <option value="TCS.NS">Tata Consultancy (NSE: TCS)</option>
+                        <option value="INFY.NS">Infosys Technologies (NSE: INFY)</option>
+                        <option value="SBIN.NS">State Bank of India (NSE: SBIN)</option>
+                        <option value="NVDA">NVIDIA Corp (NASDAQ: NVDA)</option>
+                        <option value="TSM">TSMC (NYSE: TSM)</option>
+                    </select>
+                </div>
+                
+                <div class="input-group">
+                    <label for="ticker-input"><i class="fa-solid fa-magnifying-glass"></i> Or Type Custom Ticker</label>
+                    <input type="text" id="ticker-input" placeholder="e.g. RELIANCE.NS, AAPL" value="RELIANCE.NS">
+                </div>
+            </div>
+            
+            <div class="sidebar-section">
+                <label class="section-label">Stress Configuration</label>
+                <div class="input-group">
+                    <label for="chaos-slider"><i class="fa-solid fa-gauge-high"></i> Chaos Coefficient: <span id="chaos-val">0.65</span></label>
+                    <input type="range" id="chaos-slider" min="0" max="1" step="0.05" value="0.65">
+                    <div class="slider-labels">
+                        <span>Base</span>
+                        <span>Severe</span>
+                        <span>Crisis</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="sidebar-section">
+                <label class="section-label">Observability & API Keys</label>
+                <div class="expander-header" onclick="toggleKeys()">
+                    <span><i class="fa-solid fa-key"></i> Key Configuration</span>
+                    <i class="fa-solid fa-chevron-down" id="keys-chevron"></i>
+                </div>
+                <div class="expander-content hidden" id="keys-expander">
+                    <div class="input-group">
+                        <label for="key-llm">LLM API Key (Gemini/NVIDIA)</label>
+                        <input type="password" id="key-llm" placeholder="AIzaSy... / nvapi-...">
+                    </div>
+                    <div class="input-group">
+                        <label for="key-tavily">Tavily Search API Key</label>
+                        <input type="password" id="key-tavily" placeholder="tvly-...">
+                    </div>
+                    <div class="input-group">
+                        <label for="key-arize">Arize Telemetry Key</label>
+                        <input type="password" id="key-arize" placeholder="phoenix-...">
+                    </div>
+                    <div class="input-group">
+                        <label for="key-endpoint">Telemetry Endpoint</label>
+                        <input type="text" id="key-endpoint" placeholder="http://localhost:6006/v1/traces">
+                    </div>
+                </div>
+            </div>
+            
+            <div class="sidebar-section">
+                <label class="section-label">Watchtower Alerts</label>
+                <div class="expander-header" onclick="toggleAlerts()">
+                    <span><i class="fa-solid fa-bell"></i> Email Alert Setup</span>
+                    <i class="fa-solid fa-chevron-down" id="alerts-chevron"></i>
+                </div>
+                <div class="expander-content hidden" id="alerts-expander">
+                    <div class="input-group">
+                        <label for="alert-email">Your Email</label>
+                        <input type="email" id="alert-email" placeholder="you@example.com">
+                    </div>
+                    <div class="input-group">
+                        <label for="alert-tickers">Watchlist (comma-separated)</label>
+                        <input type="text" id="alert-tickers" placeholder="NVDA, TSM, RELIANCE.NS">
+                    </div>
+                    <div class="input-group">
+                        <label for="alert-threshold">Alert Threshold: <span id="alert-thresh-val">7.0</span>/10</label>
+                        <input type="range" id="alert-threshold" min="4" max="10" step="0.5" value="7">
+                    </div>
+                    <button id="subscribe-btn" class="launch-btn" style="margin-top:8px;">
+                        <i class="fa-solid fa-shield-halved"></i> ARM WATCHLIST
+                    </button>
+                </div>
+            </div>
+
+            <button id="launch-btn" class="launch-btn">
+                <i class="fa-solid fa-play"></i> LAUNCH SYSTEM TRIBUNAL
+            </button>
+        </aside>
+        
+        <!-- MAIN DASHBOARD CONTENT -->
+        <main class="main-content">
+            
+            <!-- HEADER BAR -->
+            <header class="header-bar">
+                <div class="header-branding">
+                    <span class="header-title">DOOMSDAY RAPID AGENT</span>
+                    <span class="status-badge badge-active" id="system-status">SYS_NOMINAL</span>
+                </div>
+                
+                <!-- TOP INDICATORS -->
+                <div class="top-indicators">
+                    <div class="ind-card">
+                        <span class="ind-val" id="ind-vix">--</span>
+                        <span class="ind-label">VIX (VOL)</span>
+                    </div>
+                    <div class="ind-card">
+                        <span class="ind-val" id="ind-brent">--</span>
+                        <span class="ind-label">BRENT OIL</span>
+                    </div>
+                    <div class="ind-card">
+                        <span class="ind-val" id="ind-gold">--</span>
+                        <span class="ind-label">GOLD (OZ)</span>
+                    </div>
+                    <div class="ind-card">
+                        <span class="ind-val" id="ind-yield">--</span>
+                        <span class="ind-label">US 10Y</span>
+                    </div>
+                    <div class="ind-card highlight-fear">
+                        <span class="ind-val" id="ind-fear">--</span>
+                        <span class="ind-label">FEAR INDEX</span>
+                    </div>
+                </div>
+            </header>
+            
+            <!-- INITIAL LANDING / INSTRUCTIONS (Hidden once search runs) -->
+            <div id="landing-overlay" class="landing-box">
+                <h1 class="landing-title">FRACTURE SWARM DESTRUCTIVE DESK</h1>
+                <p class="landing-sub">
+                    Select a target asset and configure stress weights in the cockpit. 
+                    The Swarm will spin up adversarial agent debates (Bull vs. Bear) moderated by a Black Swan Judge 
+                    to compute multi-factor valuation hair-cuts.
+                </p>
+                <div class="landing-icons">
+                    <div class="landing-icon-card">
+                        <i class="fa-solid fa-magnifying-glass-chart"></i>
+                        <h3>1. Dynamic Grounding</h3>
+                    </div>
+                    <div class="landing-icon-card">
+                        <i class="fa-solid fa-users-rectangle"></i>
+                        <h3>2. Swarm Sworn Tribunal</h3>
+                    </div>
+                    <div class="landing-icon-card">
+                        <i class="fa-solid fa-chart-line-down"></i>
+                        <h3>3. Waterfall Valuation</h3>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- SYSTEM CONTENT GRID (Visible when running/finished) -->
+            <div id="dashboard-workspace" class="dashboard-workspace hidden">
+                
+                <!-- KPI METRICS ROW -->
+                <section class="kpi-grid">
+                    <div class="kpi-card">
+                        <span class="kpi-val" id="kpi-name">--</span>
+                        <span class="kpi-label" id="kpi-ticker">ASSET NAME</span>
+                    </div>
+                    <div class="kpi-card">
+                        <span class="kpi-val" id="kpi-sector">--</span>
+                        <span class="kpi-label">SECTOR / INDUSTRY</span>
+                    </div>
+                    <div class="kpi-card">
+                        <span class="kpi-val" id="kpi-cap">--</span>
+                        <span class="kpi-label">MARKET CAP (USD)</span>
+                    </div>
+                    <div class="kpi-card">
+                        <span class="kpi-val text-neon-blue" id="kpi-base-val">--</span>
+                        <span class="kpi-label">BASE FAIR VALUE</span>
+                    </div>
+                    <div class="kpi-card">
+                        <span class="kpi-val text-neon-orange" id="kpi-stressed-val">--</span>
+                        <span class="kpi-label">STRESSED VALUATION</span>
+                    </div>
+                    <div class="kpi-card highlight-downside">
+                        <span class="kpi-val text-neon-red" id="kpi-downside">--</span>
+                        <span class="kpi-label">STRESS DOWNSIDE</span>
+                    </div>
+                </section>
+                
+                <!-- FULL-WIDTH MAP & WATERFALL TOP SECTION -->
+                <div class="panel-card map-panel" style="margin-bottom: 15px;">
+                    <div class="panel-header">
+                        <h3><i class="fa-solid fa-earth-americas"></i> GEOPOLITICAL NEXUS & THREAT MAP</h3>
+                    </div>
+                    <div id="geopolitical-map" class="map-container"></div>
+                </div>
+
+                <div class="panel-card waterfall-panel" style="margin-bottom: 15px;">
+                    <div class="panel-header">
+                        <h3><i class="fa-solid fa-chart-bar"></i> STRESSED VALUATION WATERFALL BRIDGE</h3>
+                    </div>
+                    <div class="waterfall-flex">
+                        <div id="waterfall-chart" class="waterfall-container"></div>
+                        <div class="waterfall-methodology" id="waterfall-methodology">
+                            <h4 class="methodology-title">Methodology</h4>
+                            <div id="methodology-content">
+                                <div class="ws-row"><span class="ws-k">Engine</span><span class="ws-v" id="methodology-engine">--</span></div>
+                                <div class="ws-row"><span class="ws-k">Base WACC</span><span class="ws-v" id="methodology-base-wacc">--</span></div>
+                                <div class="ws-row"><span class="ws-k">Stressed WACC</span><span class="ws-v text-neon-red" id="methodology-stressed-wacc">--</span></div>
+                                <div class="ws-row"><span class="ws-k">Revenue Haircut</span><span class="ws-v text-neon-red" id="methodology-rev-haircut">--</span></div>
+                                <div class="ws-row"><span class="ws-k">Margin Compression</span><span class="ws-v text-neon-red" id="methodology-margin">--</span></div>
+                                <div class="ws-row" style="border:none"><span class="ws-k">Chaos Applied</span><span class="ws-v text-neon-orange" id="methodology-chaos">--</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- FULL-WIDTH VALIDATED RISK FEED -->
+                <div class="panel-card risk-feed-panel" style="margin-bottom: 15px;">
+                    <div class="panel-header">
+                        <h3><i class="fa-solid fa-circle-exclamation text-neon-orange"></i> VALIDATED RISK FEED</h3>
+                    </div>
+                    <div id="risk-feed-container" class="risk-feed-container">
+                        <div class="risk-feed-placeholder">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                            <p>Grounded risks will appear here as they are identified and validated.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CONTAGION CASCADE (SECOND-ORDER PROPAGATION MODEL) -->
+                <div class="panel-card contagion-panel" style="margin-bottom: 15px;">
+                    <div class="panel-header">
+                        <h3><i class="fa-solid fa-circle-nodes text-neon-orange"></i> CONTAGION CASCADE — SECOND-ORDER PROPAGATION MODEL</h3>
+                    </div>
+                    <div class="contagion-container" id="contagion-container">
+                        <div class="contagion-placeholder">
+                            <i class="fa-solid fa-diagram-project"></i>
+                            <p>Contagion cascade propagation analysis will appear here after tribunal debates conclude.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MIDDLE PANEL GRID (DEBATES & TERMINAL SIDE-BY-SIDE) -->
+                <div class="mid-layout-grid" style="margin-bottom: 15px;">
+                    <!-- LEFT COLUMN: TRIBUNAL SWARM DEBATES -->
+                    <div class="left-col">
+                        <div class="panel-card tribunal-panel">
+                            <div class="panel-header">
+                                <h3><i class="fa-solid fa-scale-balanced"></i> FRACTURE SWARM DEBATES & TRIBUNAL REPORT</h3>
+                            </div>
+                            <div id="tribunal-container" class="tribunal-container">
+                                <div class="tribunal-placeholder">
+                                    <i class="fa-solid fa-comments"></i>
+                                    <p>Debate reports will appear here sequentially as tribunals conclude.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- RIGHT COLUMN: TERMINAL -->
+                    <div class="right-col">
+                        <div class="panel-card terminal-panel">
+                            <div class="panel-header">
+                                <h3><i class="fa-solid fa-terminal"></i> LIVE INTELLIGENCE STREAM / TERMINAL</h3>
+                            </div>
+                            <div id="terminal-feed" class="terminal-feed">
+                                <div class="t-line t-dim">[SYSTEM INITIALIZED - STANDING BY]</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ARIZE PHOENIX TELEMETRY CONSOLE -->
+                <div class="panel-card telemetry-panel">
+                    <div class="panel-header">
+                        <h3><i class="fa-solid fa-satellite-dish text-neon-cyan"></i> ARIZE PHOENIX LIVE TELEMETRY CONSOLE</h3>
+                    </div>
+                    <div class="telemetry-console-container" id="telemetry-console-container">
+                        <div class="telemetry-placeholder">
+                            <i class="fa-solid fa-server"></i>
+                            <p>Live tracing telemetry will stream here during agent swarm execution.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- VALUATION TRANSPARENCY Calculation Audit Trail -->
+                <div class="panel-card transparency-panel">
+                    <div class="panel-header">
+                        <h3><i class="fa-solid fa-receipt text-neon-blue"></i> VALUATION TRANSPARENCY — CALCULATION AUDIT TRAIL</h3>
+                    </div>
+                    <div class="transparency-container" id="transparency-container">
+                        <div class="transparency-placeholder">
+                            <i class="fa-solid fa-file-invoice-dollar"></i>
+                            <p>Full routing decisions, raw inputs, and math audit trails will appear here.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+        </main>
+    </div>
+
+    <!-- Script File -->
+    <script src="index.js"></script>
+</body>
+</html>

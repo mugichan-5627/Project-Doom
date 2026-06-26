@@ -1,0 +1,15 @@
+# Secrets — NEVER commit (keys live here; set them in the Vercel dashboard instead)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local / scratch
+scratch/
+.vercel/
+*.log
