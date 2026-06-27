@@ -29,11 +29,26 @@ _TIMEOUT = 10
 
 
 def _url() -> Optional[str]:
-    return os.getenv("KV_REST_API_URL") or os.getenv("UPSTASH_REDIS_REST_URL")
+    direct = os.getenv("KV_REST_API_URL") or os.getenv("UPSTASH_REDIS_REST_URL")
+    if direct:
+        return direct
+    # Fallback: tolerate any prefix the Vercel/Upstash integration applied
+    # (e.g. STORAGE_KV_REST_API_URL) so the store works regardless of naming choice.
+    for k, v in os.environ.items():
+        if k.endswith("REST_API_URL") and v:
+            return v
+    return None
 
 
 def _token() -> Optional[str]:
-    return os.getenv("KV_REST_API_TOKEN") or os.getenv("UPSTASH_REDIS_REST_TOKEN")
+    direct = os.getenv("KV_REST_API_TOKEN") or os.getenv("UPSTASH_REDIS_REST_TOKEN")
+    if direct:
+        return direct
+    # Prefer the read-write token; never pick the READ_ONLY one.
+    for k, v in os.environ.items():
+        if k.endswith("REST_API_TOKEN") and "READ_ONLY" not in k and v:
+            return v
+    return None
 
 
 def is_configured() -> bool:
