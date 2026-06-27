@@ -681,7 +681,7 @@ async function fetchAndRenderTelemetry() {
         if (!res.ok) throw new Error("Telemetry unreachable.");
         const data = await res.json();
         const traces = data.traces;
-        const endpointUrl = data.endpoint || "https://app.phoenix.arize.com/s/moosatalha2712";
+        const endpointUrl = data.endpoint || "local";
         
         // Calculate telemetry metrics
         const totalTraces = traces.length;

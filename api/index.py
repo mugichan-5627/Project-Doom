@@ -5,6 +5,8 @@ import time
 import logging
 import random
 import math
+import re
+import threading
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from dotenv import load_dotenv
@@ -46,13 +48,32 @@ from pydantic import BaseModel
 
 app = FastAPI(title="Doomsday Rapid Agent API", version="3.1")
 
+# CORS: the cockpit is served from the SAME origin as the API, so it does not need a
+# wildcard. Restrict to the known origin(s) (override via ALLOWED_ORIGINS env) and drop
+# credentials — this removes the cross-origin drive-by amplifier without affecting the app.
+_ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "https://project-doom-seven.vercel.app,http://localhost:8000,http://127.0.0.1:8000",
+    ).split(",") if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
+
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    return response
 
 # ===============================================================
 # GLOBAL COORDS DATABASE (Ported from app.py)
@@ -521,12 +542,24 @@ def compute_valuation(company: CompanyData, chaos: float, risk_severity: float) 
 # HELPER: API KEY DYNAMIC SWITCHING
 # ===============================================================
 
+# Serializes the os.environ key-swap region below. Vercel Fluid Compute reuses one
+# instance across concurrent requests, so without this a caller's submitted BYOK keys
+# could bleed into a concurrent caller's request. The lock makes the swapped region
+# mutually exclusive, so no concurrent request ever observes another's mutated env.
+_KEY_ENV_LOCK = threading.Lock()
+
+
 class KeyContext:
     def __init__(self, api_keys: Optional[APIKeys]):
         self.keys = api_keys
         self.old_env = {}
+        self._locked = False
 
     def __enter__(self):
+        # Hold the lock for the whole env-swapped region, even for no-key requests
+        # (they read os.environ and must not observe another caller's swap).
+        _KEY_ENV_LOCK.acquire()
+        self._locked = True
         if not self.keys:
             return
         keys_map = {
@@ -553,18 +586,23 @@ class KeyContext:
             pass
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        for env_k, old_val in self.old_env.items():
-            if old_val is None:
-                os.environ.pop(env_k, None)
-            else:
-                os.environ[env_k] = old_val
-                
-        # Restore configuration refresh of the telemetry client
         try:
-            from arize_mcp_client import arize_client
-            arize_client.reconfigure()
-        except Exception:
-            pass
+            for env_k, old_val in self.old_env.items():
+                if old_val is None:
+                    os.environ.pop(env_k, None)
+                else:
+                    os.environ[env_k] = old_val
+
+            # Restore configuration refresh of the telemetry client
+            try:
+                from arize_mcp_client import arize_client
+                arize_client.reconfigure()
+            except Exception:
+                pass
+        finally:
+            if self._locked:
+                _KEY_ENV_LOCK.release()
+                self._locked = False
 
 # ===============================================================
 # HELPER: TRIBUNAL GEOCLOCK
@@ -614,6 +652,10 @@ def get_world_state():
 
 @app.get("/api/init_ticker")
 def init_ticker(ticker: str = Query(..., description="Target ticker or name")):
+    ticker = (ticker or "").strip()
+    # Reject empty / overlong / junk input before any outbound network call.
+    if not ticker or len(ticker) > 40 or not re.fullmatch(r"[A-Za-z0-9 .&\-^=]+", ticker):
+        raise HTTPException(status_code=400, detail="Invalid ticker or company name.")
     resolved = resolve_ticker(ticker)
     company = fetch_company_data(resolved)
     if not company:
@@ -983,7 +1025,17 @@ def generate_contagion(req: ContagionRequest):
 @app.get("/api/telemetry")
 def get_telemetry():
     from arize_mcp_client import GLOBAL_TRACE_CONSOLE
-    endpoint_url = os.getenv("PHOENIX_COLLECTOR_ENDPOINT") or os.getenv("PHOENIX_COLLECTOR_URL") or os.getenv("ARIZE_ENDPOINT_URL") or "https://app.phoenix.arize.com/s/moosatalha2712"
+    raw = os.getenv("PHOENIX_COLLECTOR_ENDPOINT") or os.getenv("PHOENIX_COLLECTOR_URL") or os.getenv("ARIZE_ENDPOINT_URL") or "local"
+    # Don't expose the owner's personal workspace slug (e.g. /s/<user>) to the public —
+    # return scheme+host only so the provider is visible but the identity is not.
+    endpoint_url = raw
+    if raw.startswith("http"):
+        try:
+            from urllib.parse import urlparse
+            u = urlparse(raw)
+            endpoint_url = f"{u.scheme}://{u.netloc}" if u.netloc else "local"
+        except Exception:
+            endpoint_url = "local"
     return {
         "traces": GLOBAL_TRACE_CONSOLE,
         "endpoint": endpoint_url
@@ -1021,18 +1073,19 @@ def _quick_scan(ticker: str, world_state: WorldState) -> Optional[Dict[str, Any]
 
 @app.post("/api/subscribe")
 def subscribe(req: SubscribeRequest):
-    if not req.email or "@" not in req.email:
+    email = (req.email or "").strip()
+    if "@" not in email or " " in email or "." not in email.split("@")[-1] or len(email) > 254:
         raise HTTPException(status_code=400, detail="A valid email is required.")
+    # Cap the input list BEFORE the network-bound resolve loop to prevent amplification abuse.
     tickers = []
-    for t in req.tickers:
+    for t in req.tickers[:10]:
         rt = resolve_ticker(t)
         if rt and rt not in tickers:
             tickers.append(rt)
-    tickers = tickers[:10]
     if not tickers:
         raise HTTPException(status_code=400, detail="Provide at least one ticker to watch.")
 
-    store.add_subscription(req.email, tickers, req.threshold)
+    store.add_subscription(email, tickers, req.threshold)
 
     # Instant snapshot scan + confirmation email (the live-demo moment).
     world_state = fetch_world_state_data()
@@ -1043,12 +1096,12 @@ def subscribe(req: SubscribeRequest):
             row["breached"] = row["severity"] >= req.threshold
             snapshot.append(row)
 
-    html = notify.build_confirmation_html(req.email, snapshot, world_state, req.threshold)
-    email_result = notify.send_email(req.email, "Doomsday Desk — Watchlist Armed", html)
+    html = notify.build_confirmation_html(email, snapshot, world_state, req.threshold)
+    email_result = notify.send_email(email, "Doomsday Desk — Watchlist Armed", html)
 
     return {
         "status": "subscribed",
-        "email": req.email,
+        "email": email,
         "tickers": tickers,
         "threshold": req.threshold,
         "snapshot": snapshot,
@@ -1059,9 +1112,9 @@ def subscribe(req: SubscribeRequest):
 
 @app.get("/api/cron_scan")
 def cron_scan(authorization: Optional[str] = Header(None)):
-    # If a CRON_SECRET is set, require it (Vercel Cron sends it automatically).
+    # Require CRON_SECRET — fail closed. Vercel Cron sends it as a Bearer token automatically.
     secret = os.getenv("CRON_SECRET")
-    if secret and authorization != f"Bearer {secret}":
+    if not secret or authorization != f"Bearer {secret}":
         raise HTTPException(status_code=401, detail="Unauthorized.")
 
     subs = store.get_subscriptions()

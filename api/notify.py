@@ -10,6 +10,7 @@ Env vars:
     ALERT_FROM_EMAIL   - optional; defaults to Resend's no-domain sender
 """
 import os
+import html
 import logging
 from typing import List, Dict, Any
 
@@ -90,8 +91,8 @@ def _row(item: Dict[str, Any], threshold: float) -> str:
     flag = "BREACH" if breached else "OK"
     return (
         f'<tr>'
-        f'<td style="padding:10px 12px;border-bottom:1px solid #1c2430;font-weight:bold">{item.get("ticker","")}</td>'
-        f'<td style="padding:10px 12px;border-bottom:1px solid #1c2430;color:#8b97a7">{item.get("name","")}</td>'
+        f'<td style="padding:10px 12px;border-bottom:1px solid #1c2430;font-weight:bold">{html.escape(str(item.get("ticker","")))}</td>'
+        f'<td style="padding:10px 12px;border-bottom:1px solid #1c2430;color:#8b97a7">{html.escape(str(item.get("name","")))}</td>'
         f'<td style="padding:10px 12px;border-bottom:1px solid #1c2430;color:{color};font-weight:bold">{sev:.1f}/10</td>'
         f'<td style="padding:10px 12px;border-bottom:1px solid #1c2430;color:{color}">{flag}</td>'
         f'</tr>'
@@ -140,7 +141,7 @@ def build_alert_html(email: str, breached: List[Dict[str, Any]], world_state: An
     )
     detail = "".join(
         f'<p style="font-size:13px;color:#8b97a7;margin:6px 0">'
-        f'<b style="color:#e6edf3">{b.get("ticker","")}</b> — {b.get("top_risk","")}</p>'
+        f'<b style="color:#e6edf3">{html.escape(str(b.get("ticker","")))}</b> — {html.escape(str(b.get("top_risk","")))}</p>'
         for b in breached
     )
     return (
