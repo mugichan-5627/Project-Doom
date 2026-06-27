@@ -355,7 +355,7 @@ class DoomsdayAI:
     def _test_openai(self, model, api_key, base_url):
         """Test OpenAI-compatible endpoint."""
         from openai import OpenAI
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=12.0, max_retries=0)
         r = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": "Say OK"}],
@@ -420,7 +420,9 @@ class DoomsdayAI:
     def _gen_openai_direct(self, prompt, temp, max_tokens, json_mode, timeout, model, api_key, base_url):
         from openai import OpenAI
         to = float(timeout)
-        client = OpenAI(api_key=api_key, base_url=base_url, timeout=to)
+        # max_retries=0: a throttled/invalid model returns fast so we fail over to the next
+        # model immediately, instead of the client silently retrying a slow/throttled endpoint.
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=to, max_retries=0)
 
         kwargs = {
             "model": model,
