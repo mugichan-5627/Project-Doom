@@ -213,6 +213,13 @@ class DoomsdayAI:
         self.gemini_key = gemini_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         self.nvidia_key = nvidia_key or os.getenv("NVIDIA_API_KEY")
         self.fireworks_key = fireworks_key or os.getenv("FIREWORKS_API_KEY")
+        # OpenAI-compatible providers — primary failover order is MiniMax -> Kimi.
+        self.minimax_key = os.getenv("MINIMAX_API_KEY")
+        self.minimax_model = os.getenv("MINIMAX_MODEL", "MiniMax-Text-01")
+        self.minimax_base = os.getenv("MINIMAX_BASE_URL")
+        self.kimi_key = os.getenv("KIMI_API_KEY")
+        self.kimi_model = os.getenv("KIMI_MODEL", "moonshot-v1-8k")
+        self.kimi_base = os.getenv("KIMI_BASE_URL")
         self.model = None
         self.provider = None
         self._genai = None
@@ -220,7 +227,45 @@ class DoomsdayAI:
     def initialize(self) -> str:
         """Find working model. Returns model name or raises."""
         errors = []
-        
+
+        # Try MiniMax (primary)
+        if self.minimax_key and self.minimax_base:
+            try:
+                result = run_with_timeout(
+                    self._test_openai,
+                    args=(self.minimax_model, self.minimax_key, self.minimax_base),
+                    timeout=15, default=None
+                )
+                if result:
+                    self.model = self.minimax_model
+                    self.provider = "minimax"
+                    return f"MiniMax [{self.minimax_model}]"
+                else:
+                    errors.append("MiniMax: timeout or invalid key")
+            except Exception as e:
+                errors.append(f"MiniMax: {str(e)[:80]}")
+        else:
+            errors.append("MiniMax: no key/base (MINIMAX_API_KEY/MINIMAX_BASE_URL not set)")
+
+        # Try Kimi (secondary)
+        if self.kimi_key and self.kimi_base:
+            try:
+                result = run_with_timeout(
+                    self._test_openai,
+                    args=(self.kimi_model, self.kimi_key, self.kimi_base),
+                    timeout=15, default=None
+                )
+                if result:
+                    self.model = self.kimi_model
+                    self.provider = "kimi"
+                    return f"Kimi [{self.kimi_model}]"
+                else:
+                    errors.append("Kimi: timeout or invalid key")
+            except Exception as e:
+                errors.append(f"Kimi: {str(e)[:80]}")
+        else:
+            errors.append("Kimi: no key/base (KIMI_API_KEY/KIMI_BASE_URL not set)")
+
         # Try Gemini
         if self.gemini_key:
             try:
@@ -320,16 +365,48 @@ class DoomsdayAI:
             return True
         return None
     
+    def _provider_chain(self):
+        """Ordered OpenAI-compatible providers for PER-CALL failover: MiniMax -> Kimi -> NVIDIA -> Fireworks.
+        Returns (provider_name, model, api_key, base_url) tuples for every configured provider."""
+        chain = []
+        if self.minimax_key and self.minimax_base:
+            chain.append(("minimax", self.minimax_model, self.minimax_key, self.minimax_base))
+        if self.kimi_key and self.kimi_base:
+            chain.append(("kimi", self.kimi_model, self.kimi_key, self.kimi_base))
+        if self.nvidia_key:
+            chain.append(("nvidia", "meta/llama-3.3-70b-instruct", self.nvidia_key, "https://integrate.api.nvidia.com/v1"))
+        if self.fireworks_key:
+            chain.append(("fireworks", "accounts/fireworks/models/llama-v3p3-70b-instruct", self.fireworks_key, "https://api.fireworks.ai/inference/v1"))
+        return chain
+
     def generate(self, prompt: str, temperature: float = 0.4, max_tokens: int = 2048, json_mode: bool = False, timeout: int = 25) -> Optional[str]:
-        """Generate text with a strict timeout shield. Returns None on failure.
-        `timeout` bounds both the HTTP call and the watchdog thread; raise it for large
-        generations (e.g. the multi-risk scan) so they don't time out into the fallback."""
-        def _gen():
-            if self.provider == "gemini":
+        """Generate with per-call failover (MiniMax -> Kimi -> NVIDIA -> Fireworks). Each provider is
+        tried in turn until one returns text, so a single flaky provider never drops us to templates.
+        Returns None only if EVERY configured provider fails."""
+        # Gemini (if it was the initialized provider) keeps its native path; falls through on failure.
+        if self.provider == "gemini":
+            def _gem():
                 return self._gen_gemini(prompt, temperature, max_tokens, json_mode, timeout)
-            else:
-                return self._gen_openai(prompt, temperature, max_tokens, json_mode, timeout)
-        return run_with_timeout(_gen, timeout=timeout + 5, default=None)
+            out = run_with_timeout(_gem, timeout=timeout + 5, default=None)
+            if out:
+                return out
+
+        best = None
+        for prov, model, api_key, base_url in self._provider_chain():
+            def _gen(m=model, k=api_key, b=base_url):
+                return self._gen_openai_direct(prompt, temperature, max_tokens, json_mode, timeout, m, k, b)
+            out = run_with_timeout(_gen, timeout=timeout + 5, default=None)
+            if not out:
+                continue
+            # In json_mode a non-parseable response (some reasoning models emit prose or
+            # truncated JSON) counts as a miss — fail over to the next provider, don't return junk.
+            if json_mode and parse_json_safe(out) is None:
+                if best is None:
+                    best = out
+                continue
+            self.provider, self.model = prov, model  # record what actually served the request
+            return out
+        return best
 
     def _gen_gemini(self, prompt, temp, max_tokens, json_mode, timeout=25):
         from google.genai import types
@@ -340,16 +417,13 @@ class DoomsdayAI:
         r = self._genai.models.generate_content(model=self.model, contents=prompt, config=config)
         return r.text if r else None
     
-    def _gen_openai(self, prompt, temp, max_tokens, json_mode, timeout=20):
+    def _gen_openai_direct(self, prompt, temp, max_tokens, json_mode, timeout, model, api_key, base_url):
         from openai import OpenAI
         to = float(timeout)
-        if self.provider == "nvidia":
-            client = OpenAI(api_key=self.nvidia_key, base_url="https://integrate.api.nvidia.com/v1", timeout=to)
-        else:
-            client = OpenAI(api_key=self.fireworks_key, base_url="https://api.fireworks.ai/inference/v1", timeout=to)
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=to)
 
         kwargs = {
-            "model": self.model,
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temp,
             "max_tokens": max_tokens,
@@ -357,6 +431,15 @@ class DoomsdayAI:
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        
-        r = client.chat.completions.create(**kwargs)
+
+        try:
+            r = client.chat.completions.create(**kwargs)
+        except Exception:
+            # Some OpenAI-compatible providers reject response_format; the prompt already
+            # asks for JSON and parse_json_safe extracts it, so retry once without it.
+            if "response_format" in kwargs:
+                kwargs.pop("response_format", None)
+                r = client.chat.completions.create(**kwargs)
+            else:
+                raise
         return r.choices[0].message.content

@@ -168,13 +168,9 @@ Return ONLY valid JSON:
         
         try:
             from app import parse_json_safe  # imported locally
-            response = self.ai.generate(prompt=prompt, temperature=0.5, json_mode=True, max_tokens=2200, timeout=60)
+            # generate() now fails over MiniMax -> Kimi -> NVIDIA per call, so a single call is enough.
+            response = self.ai.generate(prompt=prompt, temperature=0.5, json_mode=True, max_tokens=2200, timeout=45)
             parsed = parse_json_safe(response)
-            # One retry — the free NVIDIA tier intermittently throttles; a second attempt
-            # usually succeeds and keeps us on the real (grounded) LLM scan rather than templates.
-            if not (parsed and "risks" in parsed and len(parsed["risks"]) >= 2):
-                response = self.ai.generate(prompt=prompt, temperature=0.55, json_mode=True, max_tokens=2200, timeout=45)
-                parsed = parse_json_safe(response)
 
             if parsed and "risks" in parsed and len(parsed["risks"]) >= 2:
                 final_risks = parsed["risks"][:6]
