@@ -320,16 +320,18 @@ class DoomsdayAI:
             return True
         return None
     
-    def generate(self, prompt: str, temperature: float = 0.4, max_tokens: int = 2048, json_mode: bool = False) -> Optional[str]:
-        """Generate text with a strict timeout shield. Returns None on failure."""
+    def generate(self, prompt: str, temperature: float = 0.4, max_tokens: int = 2048, json_mode: bool = False, timeout: int = 25) -> Optional[str]:
+        """Generate text with a strict timeout shield. Returns None on failure.
+        `timeout` bounds both the HTTP call and the watchdog thread; raise it for large
+        generations (e.g. the multi-risk scan) so they don't time out into the fallback."""
         def _gen():
             if self.provider == "gemini":
-                return self._gen_gemini(prompt, temperature, max_tokens, json_mode)
+                return self._gen_gemini(prompt, temperature, max_tokens, json_mode, timeout)
             else:
-                return self._gen_openai(prompt, temperature, max_tokens, json_mode)
-        return run_with_timeout(_gen, timeout=25, default=None)
-    
-    def _gen_gemini(self, prompt, temp, max_tokens, json_mode):
+                return self._gen_openai(prompt, temperature, max_tokens, json_mode, timeout)
+        return run_with_timeout(_gen, timeout=timeout + 5, default=None)
+
+    def _gen_gemini(self, prompt, temp, max_tokens, json_mode, timeout=25):
         from google.genai import types
         config_kwargs = {"temperature": temp, "max_output_tokens": max_tokens}
         if json_mode:
@@ -338,19 +340,20 @@ class DoomsdayAI:
         r = self._genai.models.generate_content(model=self.model, contents=prompt, config=config)
         return r.text if r else None
     
-    def _gen_openai(self, prompt, temp, max_tokens, json_mode):
+    def _gen_openai(self, prompt, temp, max_tokens, json_mode, timeout=20):
         from openai import OpenAI
+        to = float(timeout)
         if self.provider == "nvidia":
-            client = OpenAI(api_key=self.nvidia_key, base_url="https://integrate.api.nvidia.com/v1", timeout=20.0)
+            client = OpenAI(api_key=self.nvidia_key, base_url="https://integrate.api.nvidia.com/v1", timeout=to)
         else:
-            client = OpenAI(api_key=self.fireworks_key, base_url="https://api.fireworks.ai/inference/v1", timeout=20.0)
-        
+            client = OpenAI(api_key=self.fireworks_key, base_url="https://api.fireworks.ai/inference/v1", timeout=to)
+
         kwargs = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temp,
             "max_tokens": max_tokens,
-            "timeout": 20.0
+            "timeout": to
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}

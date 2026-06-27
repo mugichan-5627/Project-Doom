@@ -788,13 +788,22 @@ def run_tribunal(req: TribunalRequest):
                 pass
 
         else:
+            tavily_client = None
+            try:
+                tavily_key = os.getenv("TAVILY_API_KEY")
+                if tavily_key:
+                    from tavily import TavilyClient
+                    tavily_client = TavilyClient(api_key=tavily_key)
+            except Exception:
+                tavily_client = None
             swarm = AgentBuilderSwarm(ai_client)
             try:
                 verdict = swarm.run_adversarial_tribunal(
                     ticker=req.ticker,
                     company_data=company_obj,
                     risk=req.risk,
-                    world_state=world_state_obj
+                    world_state=world_state_obj,
+                    tavily_client=tavily_client
                 )
             except Exception as e:
                 # Degrade gracefully instead of 500 if the live swarm fails (e.g. malformed LLM output)

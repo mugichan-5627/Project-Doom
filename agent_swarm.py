@@ -95,14 +95,29 @@ class AgentBuilderSwarm:
         # 3. Start LLM Swarm Synthesis Span
         swarm_span = arize_client.start_span(trace_id=trace_id, name="Swarm Synthesis (Gemini 3)")
         
-        # Pull real-time news fallback if Tavily is active
+        # Pull real-time open-source grounding from Tavily (news, analyst views, retail/forum debate).
         news = ""
         if tavily_client:
             from app import tavily_search  # imported locally to avoid circular dependencies
-            broad = tavily_search(tavily_client, f"{company_data.name} {ticker} risk analysis bear case 2026", max_results=3)
-            if broad:
-                news += f"\n[BROAD NEWS]:\n{broad}\n"
-                
+            queries = [
+                f"{company_data.name} ({ticker}) biggest business and macro risks, bear case, investor concerns 2026",
+                f"{company_data.name} stock latest news, catalysts and analyst views 2026",
+            ]
+            chunks = []
+            for q in queries:
+                hit = tavily_search(tavily_client, q, max_results=3)
+                if hit and "Search error" not in hit:
+                    chunks.append(hit)
+            if chunks:
+                # Cap the grounding so a heavily-covered ticker can't bloat the prompt and slow generation.
+                news = "\n\n".join(chunks)[:2500]
+
+        news_block = (
+            "\n\nREAL-TIME OPEN-SOURCE GROUNDING (recent news, analyst notes, and forum/retail debate with "
+            "source URLs — anchor every risk in SPECIFIC facts, named entities, events and dates drawn from "
+            "here; never invent):\n" + news + "\n"
+        ) if news else ""
+
         # Incorporate Elastic grounding items
         grounding_context = "\n".join([
             f"- Grounded Risk [{r['title']} in {r['geographic_nexus']}]: {r['description']} (Severity: {r['severity']}/10)"
@@ -116,7 +131,7 @@ KNOWN PARAMETERS FOR {company_data.name}:
 - Debt: ${company_data.total_debt/1e9:.1f}B, Cash: ${company_data.cash/1e9:.1f}B
 - Revenue Growth: {getattr(company_data, 'revenue_growth', 0)*100:.1f}%"""
 
-        prompt = f"""You are a senior institutional risk analyst. Identify the TOP 6 most material stress and stress-test scenarios for {ticker} ({company_data.name}).
+        prompt = f"""You are a senior institutional risk analyst writing for an investment committee. Identify the TOP 6 most material, NON-GENERIC stress scenarios specific to {ticker} ({company_data.name}).
 You MUST leverage the following grounded macro risks retrieved from our Elastic Vector DB:
 
 {grounding_context}
@@ -126,11 +141,13 @@ You MUST leverage the following grounded macro risks retrieved from our Elastic 
 CURRENT WORLD STATE:
 - VIX: {world_state.vix} | Fear Level: {world_state.fear_level}
 - Oil: ${world_state.oil_brent} | Gold: ${world_state.gold} | US 10Y Yield: {world_state.us_10y_yield}%
-
+{news_block}
 CRITICAL INSTRUCTIONS:
-1. Return EXACTLY 6 risks. All must be different domains (geopolitical, supply_chain, financial, regulatory, technology, market).
-2. Integrate the grounded Elastic macro risks into specific company contexts.
-3. Include geographic locations where each risk physically manifests.
+1. Return EXACTLY 6 risks, each a DIFFERENT domain (geopolitical, supply_chain, financial, regulatory, technology, market).
+2. Make every risk SPECIFIC TO THIS COMPANY — name its actual customers, suppliers, competitors, products, regulators, plants or geographies, or recent events. Avoid boilerplate that could apply to any company in the sector.
+3. Where the real-time grounding above exists, anchor the risk in those concrete facts/events and reference them in the description.
+4. Quantify the transmission: which line item breaks (revenue, margin, multiple, WACC) and the second-order knock-on effect.
+5. Include the geographic location where each risk physically manifests.
 
 Return ONLY valid JSON:
 {{
@@ -138,8 +155,8 @@ Return ONLY valid JSON:
         {{
             "id": "RISK_001",
             "domain": "geopolitical|supply_chain|financial|regulatory|technology|market",
-            "title": "Specific title (5-8 words)",
-            "description": "2-3 sentences outlining the specific stress scenario with numbers.",
+            "title": "Specific, company-distinct title (5-9 words)",
+            "description": "2-3 sentences: the concrete scenario, the specific entities/events involved, the financial transmission with numbers, and the second-order effect.",
             "severity": 7,
             "probability": 0.4,
             "geographic_nexus": "Specific city/region",
@@ -150,10 +167,15 @@ Return ONLY valid JSON:
 }}"""
         
         try:
-            response = self.ai.generate(prompt=prompt, temperature=0.5, json_mode=True, max_tokens=3000)
             from app import parse_json_safe  # imported locally
+            response = self.ai.generate(prompt=prompt, temperature=0.5, json_mode=True, max_tokens=2200, timeout=60)
             parsed = parse_json_safe(response)
-            
+            # One retry — the free NVIDIA tier intermittently throttles; a second attempt
+            # usually succeeds and keeps us on the real (grounded) LLM scan rather than templates.
+            if not (parsed and "risks" in parsed and len(parsed["risks"]) >= 2):
+                response = self.ai.generate(prompt=prompt, temperature=0.55, json_mode=True, max_tokens=2200, timeout=45)
+                parsed = parse_json_safe(response)
+
             if parsed and "risks" in parsed and len(parsed["risks"]) >= 2:
                 final_risks = parsed["risks"][:6]
                 
@@ -192,7 +214,7 @@ Return ONLY valid JSON:
         arize_client.complete_trace(trace_id=trace_id)
         return final_risks
 
-    def run_adversarial_tribunal(self, ticker: str, company_data: Any, risk: Dict[str, Any], world_state: Any) -> Optional[RiskVerdict]:
+    def run_adversarial_tribunal(self, ticker: str, company_data: Any, risk: Dict[str, Any], world_state: Any, tavily_client: Any = None) -> Optional[RiskVerdict]:
         """
         Runs an adversarial Bear vs Bull debate prosecuted by Gemini 3 and moderated by the Black Swan Judge.
         Logs nested trace hierarchy to Arize Phoenix.
@@ -227,16 +249,32 @@ BALANCE SHEET & FINANCIAL METRICS FOR {company_name} ({ticker}):
         else:
             company_context = f"BALANCE SHEET METRICS FOR {company_name}: Basic fallback mode (no balance sheet available)."
 
+        # Real-time evidence for THIS specific risk, so the advocates argue from facts, not boilerplate.
+        evidence_block = ""
+        if tavily_client:
+            try:
+                from app import tavily_search
+                hit = tavily_search(tavily_client, f"{company_name} {risk_title} impact analysis 2026", max_results=3)
+                if hit and "Search error" not in hit:
+                    evidence_block = (
+                        "\n\nREAL-TIME EVIDENCE (cite specific facts, companies, numbers and source URLs from "
+                        "below; never fabricate):\n" + hit + "\n"
+                    )
+            except Exception:
+                evidence_block = ""
+
         # --- BEAR SPAN ---
         bear_span = arize_client.start_span(trace_id=trace_id, name="Bear Advocate Prosecution")
-        bear_prompt = f"""You are the BEAR ADVOCATE prosecuting risk for {ticker}.
+        bear_prompt = f"""You are the BEAR ADVOCATE prosecuting risk for {ticker} before an investment committee.
 RISK TRIGGER: {risk_title} - {risk_desc}
 Grounding Evidence: {evidence_citation}
 
 {company_context}
-
-Present the worst-case macroeconomic or operational downside in 2-3 sentences. 
-Be highly specific with financial numbers (referencing the balance sheet metrics above, like leverage, cash position, and revenue vulnerability), supply chain linkages, and past distress precedents.
+{evidence_block}
+Build the worst-case in 3-4 tight, high-conviction sentences. Requirements:
+- Name the SPECIFIC entities in the chain (actual customers, suppliers, competitors, regulators, plants, geographies) — never generic categories.
+- Quantify using the balance-sheet metrics above (leverage, cash runway, revenue at risk, margin compression, multiple de-rating) AND cite at least one concrete fact/number from the real-time evidence if present.
+- Trace the second- and third-order effects, and cite a dated historical precedent.
 Return JSON only: {{"argument": "your text here", "severity_estimate": 7, "confidence": 0.75}}"""
         
         bear_raw = self.ai.generate(prompt=bear_prompt, temperature=0.6, json_mode=True, max_tokens=500)
@@ -256,14 +294,16 @@ Return JSON only: {{"argument": "your text here", "severity_estimate": 7, "confi
         
         # --- BULL SPAN ---
         bull_span = arize_client.start_span(trace_id=trace_id, name="Bull Advocate Mitigation")
-        bull_prompt = f"""You are the BULL ADVOCATE defending {ticker}.
+        bull_prompt = f"""You are the BULL ADVOCATE defending {ticker} before an investment committee.
 RISK TRIGGER: {risk_title} - {risk_desc}
 BEAR ARGUED: {bear.get("argument", "")}
 
 {company_context}
-
-Challenge the Bear's assumptions in 2-3 sentences. 
-Cite corporate balance sheet strengths (specifically referencing the metrics above, e.g. debt coverage, cash buffers, growth capacity, or low valuation multiples) and market pricing.
+{evidence_block}
+Rebut the Bear in 3-4 tight, high-conviction sentences. Requirements:
+- Attack the Bear's single weakest specific assumption head-on.
+- Cite concrete balance-sheet strengths (debt coverage, cash buffers, FCF, growth, valuation multiple) AND any mitigating fact from the real-time evidence (diversification, hedges, pricing power, already-priced-in).
+- Explain why the current market multiple already discounts this risk.
 Return JSON only: {{"argument": "your text here", "confidence": 0.55}}"""
         
         bull_raw = self.ai.generate(prompt=bull_prompt, temperature=0.6, json_mode=True, max_tokens=500)
