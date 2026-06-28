@@ -1247,6 +1247,11 @@ function drawMap(centerLat, centerLon, zoom) {
             font: { color: "#c8d6e5", size: 10 },
             x: 0.01, y: 0.99
         },
+        hoverlabel: {
+            bgcolor: "#0c1018",
+            bordercolor: "#ff8c42",
+            font: { color: "#e6edf3", size: 12 }
+        },
         margin: { l: 0, r: 0, t: 0, b: 0 },
         height: 560,
         paper_bgcolor: "#080b10",
